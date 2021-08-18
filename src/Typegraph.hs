@@ -35,6 +35,9 @@ defaultConfig =
     , noqualified = False
     }
 
+-- TODO: Add writeD3
+-- https://bl.ocks.org/heybignick/3faf257bbbbc7743bb72310d03b86ee8
+
 writeGraphviz :: Name -> FilePath -> Config -> Q [Dec]
 writeGraphviz name fp config = do
   edges <- execStateT (nameEdges name) mempty
