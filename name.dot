@@ -1,0 +1,17 @@
+digraph G {
+"String" -> "Char"
+
+
+
+"ModName" -> "String"
+"Name" -> "NameFlavour"
+"Name" -> "OccName"
+"NameFlavour" -> "ModName"
+"NameFlavour" -> "NameSpace"
+"NameFlavour" -> "PkgName"
+"NameFlavour" -> "Uniq"
+
+"OccName" -> "String"
+"PkgName" -> "String"
+
+}

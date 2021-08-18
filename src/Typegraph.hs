@@ -1,6 +1,10 @@
 {-# LANGUAGE LambdaCase, NamedFieldPuns, OverloadedStrings, ViewPatterns #-}
 
-module Typegraph (writeGraphviz) where
+module Typegraph
+  ( writeGraphviz
+  , Config(..)
+  , defaultConfig
+  ) where
 
 import           Control.Monad.State.Strict
 import qualified Data.ByteString.Lazy.Builder as SB
@@ -9,6 +13,7 @@ import           Data.Generics.Schemes
 import qualified Data.List as List
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
+import           Data.Maybe
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.String
@@ -16,8 +21,20 @@ import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax (NameSpace(..))
 import           System.IO
 
-writeGraphviz :: Name -> FilePath -> [String] -> Q [Dec]
-writeGraphviz name fp (Set.fromList -> unqualified) = do
+data Config = Config
+  { unqualified :: Set String
+  , ignore :: Set String
+  }
+
+defaultConfig :: Config
+defaultConfig =
+  Config
+    { unqualified = Set.fromList ["base:GHC.Base", "ghc-prim:GHC.Types"]
+    , ignore = Set.fromList ["integer-wired-in", "ghc-prim:GHC.Prim"]
+    }
+
+writeGraphviz :: Name -> FilePath -> Config -> Q [Dec]
+writeGraphviz name fp config = do
   edges <- execStateT (nameEdges name) mempty
   runIO
     (withFile
@@ -30,24 +47,40 @@ writeGraphviz name fp (Set.fromList -> unqualified) = do
              mconcat
                (List.intersperse
                   "\n"
-                  (map (printEdge unqualified) (M.toList edges))) <>
+                  (map (printEdge config) (M.toList edges))) <>
              "\n}")))
   pure []
 
-printEdge :: Set String -> (Name,Set Name) -> SB.Builder
-printEdge unqualified (name, names) =
+printEdge :: Config -> (Name,Set Name) -> SB.Builder
+printEdge config@Config {ignore} (name, names) =
   mconcat
     (List.intersperse
        "\n"
-       [ quoted (printName unqualified name) <> " -> " <>
-       quoted (printName unqualified dep)
+       [ quoted (printName config name) <> " -> " <>
+       quoted (printName config dep)
        | dep <- toList names
+       , not (isIgnored name)
+       , not (isIgnored dep)
        ])
   where
     quoted x = "\"" <> x <> "\""
+    isIgnored name' =
+      Set.member
+        (fromMaybe
+           ""
+           (do pkg <- namePackage name'
+               mod' <- nameModule name'
+               pure (pkg <> ":" <> mod')))
+        ignore ||
+      Set.member
+        (fromMaybe
+           ""
+           (do pkg <- namePackage name'
+               pure pkg))
+        ignore
 
-printName :: Set String -> Name -> SB.Builder
-printName unqualified name = packageModule <> base
+printName :: Config -> Name -> SB.Builder
+printName Config{unqualified} name = packageModule <> base
   where
     packageModule =
       case do pkg <- namePackage name
@@ -97,6 +130,14 @@ decEdges =
         (do let children =
                   Set.fromList (listify isTypeName ctx) <>
                   Set.fromList (listify isTypeName cons)
+            modify (M.insert name children)
+            traverse_ nameEdges (Set.toList children))
+    TySynD name _tyvars typ -> do
+      seen <- get
+      unless
+        (M.member name seen)
+        (do let children =
+                  Set.fromList (listify isTypeName typ)
             modify (M.insert name children)
             traverse_ nameEdges (Set.toList children))
     _ -> pure ()
