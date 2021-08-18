@@ -1,4 +1,4 @@
-{-# LANGUAGE LambdaCase, NamedFieldPuns, OverloadedStrings, ViewPatterns #-}
+{-# LANGUAGE FlexibleContexts, RecordWildCards, LambdaCase, NamedFieldPuns, OverloadedStrings, ViewPatterns #-}
 
 module Typegraph
   ( writeGraphviz
@@ -28,6 +28,11 @@ data Config = Config
   , noqualified :: Bool
   }
 
+data Data = Data
+  { graph :: Map Name (Set Name)
+  , groups :: [Set Name]
+  }
+
 defaultConfig :: Config
 defaultConfig =
   Config
@@ -41,7 +46,8 @@ defaultConfig =
 
 writeGraphviz :: Name -> FilePath -> Config -> Q [Dec]
 writeGraphviz name fp config = do
-  edges <- execStateT (nameEdges name) mempty
+  Data {graph = edges, groups} <-
+    execStateT (nameEdges name) Data {graph = mempty, groups = mempty}
   runIO
     (withFile
        fp
@@ -53,10 +59,22 @@ writeGraphviz name fp config = do
              mconcat
                (List.intersperse
                   "\n"
-                  (map (printNode config) (M.keys edges) <>
+                  (zipWith (printGroup config) [0 ..] groups <>
+                   map (printNode config) (M.keys edges) <>
                    map (printEdge config) (M.toList edges))) <>
              "\n}")))
   pure []
+
+printGroup :: Config -> Int -> Set Name -> SB.Builder
+printGroup config@Config {ignore} index names =
+  "subgraph cluster_" <> fromString (show index) <> "{" <>
+  mconcat
+    (List.intersperse
+       "\n"
+       (map
+          (quoted . printName config)
+          (filter (not . isIgnored ignore) (toList names)))) <>
+  "}"
 
 printNode :: Config -> Name -> SB.Builder
 printNode config@Config {ignore} name =
@@ -132,7 +150,7 @@ printName Config {unqualified, noqualified} name =
                     Just DataName -> " "
                     _ -> ""
 
-nameEdges :: Name -> StateT (Map Name (Set Name)) Q ()
+nameEdges :: Name -> StateT Data Q ()
 nameEdges name =
   when
     (isTypeName name)
@@ -142,45 +160,48 @@ nameEdges name =
             decEdges dec
           _ -> pure ())
 
-decEdges :: Dec -> StateT (Map Name (Set Name)) Q ()
+decEdges :: Dec -> StateT Data Q ()
 decEdges =
   \case
     DataD ctx name _tyvars _kind cons _deriv -> do
-      seen <- get
+      seen <- gets graph
       unless
         (M.member name seen)
         (do let children = Set.fromList (listify isTypeName ctx)
-            modify (M.insertWith (<>) name children)
-            for_
-              cons
-              (\con -> do
-                 conNames <- conEdges mempty con
-                 modify (M.insertWith (<>) name (Set.fromList conNames)))
+            modifyGraph (M.insertWith (<>) name children)
+            names <-
+              for
+                cons
+                (\con -> do
+                   conNames <- conEdges mempty con
+                   modifyGraph (M.insertWith (<>) name (Set.fromList conNames))
+                   pure conNames)
+            modifyGroups (Set.fromList (mconcat names) :)
             traverse_ nameEdges (Set.toList children))
     NewtypeD ctx name _tyvars _kind cons _deriv -> do
-      seen <- get
+      seen <- gets graph
       unless
         (M.member name seen)
         (do let children =
                   Set.fromList (listify isTypeName ctx) <>
                   Set.fromList (listify isTypeName cons)
-            modify (M.insertWith (<>) name children)
+            modifyGraph (M.insertWith (<>) name children)
             traverse_ nameEdges (Set.toList children))
     TySynD name _tyvars typ -> do
-      seen <- get
+      seen <- gets graph
       unless
         (M.member name seen)
         (do let children = Set.fromList (listify isTypeName typ)
-            modify (M.insertWith (<>) name children)
+            modifyGraph (M.insertWith (<>) name children)
             traverse_ nameEdges (Set.toList children))
     _ -> pure ()
 
-conEdges :: Set Name -> Con -> StateT (Map Name (Set Name)) Q [Name]
+conEdges :: Set Name -> Con -> StateT Data Q [Name]
 conEdges extras =
   \case
     NormalC name tys -> do
       let deps = extras <> Set.fromList (listify isTypeName tys)
-      modify (M.insertWith (<>) name deps)
+      modifyGraph (M.insertWith (<>) name deps)
       traverse_ nameEdges (Set.toList deps)
       pure (pure name)
     RecC name tys -> do
@@ -189,15 +210,16 @@ conEdges extras =
           tys
           (\(fieldname, _, typ) -> do
              let deps = Set.fromList (listify isTypeName typ)
-             modify (M.insertWith (<>) fieldname deps)
+             modifyGraph (M.insertWith (<>) fieldname deps)
              traverse_ nameEdges (Set.toList deps)
              pure fieldname)
-      modify (M.insertWith (<>) name (extras <> Set.fromList fieldnames))
+      modifyGraph (M.insertWith (<>) name (extras <> Set.fromList fieldnames))
+      modifyGroups (Set.fromList fieldnames :)
       traverse_ nameEdges extras
       pure (pure name)
     InfixC _ name tys -> do
       let deps = extras <> Set.fromList (listify isTypeName tys)
-      modify (M.insertWith (<>) name deps)
+      modifyGraph (M.insertWith (<>) name deps)
       traverse_ nameEdges (Set.toList deps)
       pure (pure name)
     ForallC tyvars cxt' con ->
@@ -209,16 +231,24 @@ conEdges extras =
       let deps =
             Set.fromList (listify isTypeName tys) <>
             Set.fromList (listify isTypeName ty)
-      for_ names (\name -> modify (M.insertWith (<>) name deps))
+      for_ names (\name -> modifyGraph (M.insertWith (<>) name deps))
       traverse_ nameEdges (Set.toList deps)
       pure names
     RecGadtC names tys ty -> do
       let deps =
             Set.fromList (listify isTypeName tys) <>
             Set.fromList (listify isTypeName ty)
-      for_ names (\name -> modify (M.insertWith (<>) name deps))
+      for_ names (\name -> modifyGraph (M.insertWith (<>) name deps))
       traverse_ nameEdges (Set.toList deps)
       pure names
 
 isTypeName :: Name -> Bool
 isTypeName name = nameSpace name == Just TcClsName
+
+modifyGraph ::
+     MonadState Data m => (Map Name (Set Name) -> Map Name (Set Name)) -> m ()
+modifyGraph f = modify (\Data {..} -> Data {graph = f graph, ..})
+
+modifyGroups ::
+     MonadState Data m => ([Set Name] -> [Set Name]) -> m ()
+modifyGroups f = modify (\Data {..} -> Data {groups = f groups, ..})
