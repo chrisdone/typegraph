@@ -17,6 +17,7 @@ import           Data.Maybe
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.String
+import           Data.Traversable
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax (NameSpace(..))
 import           System.IO
@@ -52,9 +53,23 @@ writeGraphviz name fp config = do
              mconcat
                (List.intersperse
                   "\n"
-                  (map (printEdge config) (M.toList edges))) <>
+                  (map (printNode config) (M.keys edges) <>
+                   map (printEdge config) (M.toList edges))) <>
              "\n}")))
   pure []
+
+printNode :: Config -> Name -> SB.Builder
+printNode config@Config {ignore} name =
+  if not (isIgnored ignore name)
+    then quoted (printName config name) <> " [shape=plain, fontcolor=" <> color <>
+         "]"
+    else ""
+  where
+    color =
+      case nameSpace name of
+        Just VarName -> quoted "#e300ff"
+        Just DataName -> quoted "#005aff"
+        _ -> quoted "#333333"
 
 printEdge :: Config -> (Name,Set Name) -> SB.Builder
 printEdge config@Config {ignore} (name, names) =
@@ -64,12 +79,15 @@ printEdge config@Config {ignore} (name, names) =
        [ quoted (printName config name) <> " -> " <>
        quoted (printName config dep)
        | dep <- toList names
-       , not (isIgnored name)
-       , not (isIgnored dep)
+       , not (isIgnored ignore name)
+       , not (isIgnored ignore dep)
        ])
-  where
-    quoted x = "\"" <> x <> "\""
-    isIgnored name' =
+
+quoted :: (Semigroup a, IsString a) => a -> a
+quoted x = "\"" <> x <> "\""
+
+isIgnored :: Set String -> Name -> Bool
+isIgnored ignore name' =
       Set.member
         (fromMaybe
            ""
@@ -108,7 +126,11 @@ printName Config {unqualified, noqualified} name =
       case nameModule name of
         Nothing -> ""
         Just pkg -> fromString pkg <> "."
-    base = fromString (nameBase name)
+    base = fromString (nameBase name) <> typ
+      where typ = case nameSpace name of
+                    Just VarName -> "  "
+                    Just DataName -> " "
+                    _ -> ""
 
 nameEdges :: Name -> StateT (Map Name (Set Name)) Q ()
 nameEdges name =
@@ -127,10 +149,13 @@ decEdges =
       seen <- get
       unless
         (M.member name seen)
-        (do let children =
-                  Set.fromList (listify isTypeName ctx) <>
-                  Set.fromList (listify isTypeName cons)
-            modify (M.insert name children)
+        (do let children = Set.fromList (listify isTypeName ctx)
+            modify (M.insertWith (<>) name children)
+            for_
+              cons
+              (\con -> do
+                 conNames <- conEdges mempty con
+                 modify (M.insertWith (<>) name (Set.fromList conNames)))
             traverse_ nameEdges (Set.toList children))
     NewtypeD ctx name _tyvars _kind cons _deriv -> do
       seen <- get
@@ -139,17 +164,61 @@ decEdges =
         (do let children =
                   Set.fromList (listify isTypeName ctx) <>
                   Set.fromList (listify isTypeName cons)
-            modify (M.insert name children)
+            modify (M.insertWith (<>) name children)
             traverse_ nameEdges (Set.toList children))
     TySynD name _tyvars typ -> do
       seen <- get
       unless
         (M.member name seen)
-        (do let children =
-                  Set.fromList (listify isTypeName typ)
-            modify (M.insert name children)
+        (do let children = Set.fromList (listify isTypeName typ)
+            modify (M.insertWith (<>) name children)
             traverse_ nameEdges (Set.toList children))
     _ -> pure ()
+
+conEdges :: Set Name -> Con -> StateT (Map Name (Set Name)) Q [Name]
+conEdges extras =
+  \case
+    NormalC name tys -> do
+      let deps = extras <> Set.fromList (listify isTypeName tys)
+      modify (M.insertWith (<>) name deps)
+      traverse_ nameEdges (Set.toList deps)
+      pure (pure name)
+    RecC name tys -> do
+      fieldnames <-
+        for
+          tys
+          (\(fieldname, _, typ) -> do
+             let deps = Set.fromList (listify isTypeName typ)
+             modify (M.insertWith (<>) fieldname deps)
+             traverse_ nameEdges (Set.toList deps)
+             pure fieldname)
+      modify (M.insertWith (<>) name (extras <> Set.fromList fieldnames))
+      traverse_ nameEdges extras
+      pure (pure name)
+    InfixC _ name tys -> do
+      let deps = extras <> Set.fromList (listify isTypeName tys)
+      modify (M.insertWith (<>) name deps)
+      traverse_ nameEdges (Set.toList deps)
+      pure (pure name)
+    ForallC tyvars cxt' con ->
+      conEdges
+        (Set.fromList (listify isTypeName tyvars) <>
+         Set.fromList (listify isTypeName cxt'))
+        con
+    GadtC names tys ty -> do
+      let deps =
+            Set.fromList (listify isTypeName tys) <>
+            Set.fromList (listify isTypeName ty)
+      for_ names (\name -> modify (M.insertWith (<>) name deps))
+      traverse_ nameEdges (Set.toList deps)
+      pure names
+    RecGadtC names tys ty -> do
+      let deps =
+            Set.fromList (listify isTypeName tys) <>
+            Set.fromList (listify isTypeName ty)
+      for_ names (\name -> modify (M.insertWith (<>) name deps))
+      traverse_ nameEdges (Set.toList deps)
+      pure names
 
 isTypeName :: Name -> Bool
 isTypeName name = nameSpace name == Just TcClsName
