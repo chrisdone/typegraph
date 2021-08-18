@@ -1,20 +1,47 @@
 digraph G {
-subgraph cluster_0{"Rec "}
-subgraph cluster_1{"field1  "
-"field2  "}
-subgraph cluster_2{"Module "}
-subgraph cluster_3{"Name "}
-subgraph cluster_4{"NameG "
+subgraph cluster_0{
+peripheries=0
+"Rec "
+}
+subgraph cluster_1{
+peripheries=0
+"field1  "
+"field2  "
+}
+subgraph cluster_2{
+peripheries=0
+"Module "
+}
+subgraph cluster_3{
+peripheries=0
+"Name "
+}
+subgraph cluster_4{
+peripheries=0
+"NameG "
 "NameL "
 "NameQ "
 "NameS "
-"NameU "}
-subgraph cluster_5{"DataName "
+"NameU "
+}
+subgraph cluster_5{
+peripheries=0
+"DataName "
 "TcClsName "
-"VarName "}
-subgraph cluster_6{}
-subgraph cluster_7{}
-subgraph cluster_8{"C# "}
+"VarName "
+}
+subgraph cluster_6{
+peripheries=0
+
+}
+subgraph cluster_7{
+peripheries=0
+
+}
+subgraph cluster_8{
+peripheries=0
+"C# "
+}
 "field1  " [shape=plain, fontcolor="#e300ff"]
 "field2  " [shape=plain, fontcolor="#e300ff"]
 "C# " [shape=plain, fontcolor="#005aff"]

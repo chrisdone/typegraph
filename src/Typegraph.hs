@@ -67,14 +67,15 @@ writeGraphviz name fp config = do
 
 printGroup :: Config -> Int -> Set Name -> SB.Builder
 printGroup config@Config {ignore} index names =
-  "subgraph cluster_" <> fromString (show index) <> "{" <>
+  "subgraph cluster_" <> fromString (show index) <> "{\n" <>
+  "peripheries=0\n" <>
   mconcat
     (List.intersperse
        "\n"
        (map
           (quoted . printName config)
           (filter (not . isIgnored ignore) (toList names)))) <>
-  "}"
+  "\n}"
 
 printNode :: Config -> Name -> SB.Builder
 printNode config@Config {ignore} name =
@@ -243,7 +244,8 @@ conEdges extras =
       pure names
 
 isTypeName :: Name -> Bool
-isTypeName name = nameSpace name == Just TcClsName
+isTypeName name =
+  nameSpace name == Just TcClsName
 
 modifyGraph ::
      MonadState Data m => (Map Name (Set Name) -> Map Name (Set Name)) -> m ()
