@@ -24,6 +24,7 @@ import           System.IO
 data Config = Config
   { unqualified :: Set String
   , ignore :: Set String
+  , noqualified :: Bool
   }
 
 defaultConfig :: Config
@@ -31,6 +32,7 @@ defaultConfig =
   Config
     { unqualified = Set.fromList ["base:GHC.Base", "ghc-prim:GHC.Types"]
     , ignore = Set.fromList ["integer-wired-in", "ghc-prim:GHC.Prim"]
+    , noqualified = False
     }
 
 writeGraphviz :: Name -> FilePath -> Config -> Q [Dec]
@@ -80,7 +82,11 @@ printEdge config@Config {ignore} (name, names) =
         ignore
 
 printName :: Config -> Name -> SB.Builder
-printName Config{unqualified} name = packageModule <> base
+printName Config {unqualified, noqualified} name =
+  (if noqualified
+     then ""
+     else packageModule) <>
+  base
   where
     packageModule =
       case do pkg <- namePackage name
